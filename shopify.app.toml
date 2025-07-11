@@ -1,0 +1,32 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "fe15c1b76dabdcb407a0030cc26469e5"
+name = "random-sku-generator"
+handle = "random-sku-generator"
+application_url = "https://bargains-phpbb-key-sword.trycloudflare.com"
+embedded = true
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2025-07"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products, read_products"
+
+[auth]
+redirect_urls = ["https://bargains-phpbb-key-sword.trycloudflare.com/auth/callback", "https://bargains-phpbb-key-sword.trycloudflare.com/auth/shopify/callback", "https://bargains-phpbb-key-sword.trycloudflare.com/api/auth/callback"]
+
+[pos]
+embedded = false

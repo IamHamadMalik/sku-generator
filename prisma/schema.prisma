@@ -1,0 +1,49 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  session_id    String    @id @default(auto()) @map("_id") @db.ObjectId
+  id            String    @unique
+  shop          String
+  state         String
+  isOnline      Boolean  @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean  @default(false)
+  locale        String?
+  collaborator  Boolean? @default(false)
+  emailVerified Boolean? @default(false)
+}
+
+// Stores the current SKU counter for each shop
+model StoreCounter {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  shop       String   @unique
+  currentSku Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Optionally stores generated SKUs for audit/logging
+model ProductSKU {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  shop       String
+  productId  String
+  variantId  String
+  skuNumber  Int
+  createdAt  DateTime @default(now())
+}
