@@ -3,6 +3,21 @@ import { json } from "@remix-run/node";
 import prisma from "../db.server";
 import { shopifyApiClient, authenticate } from "../shopify.server";
 
+// GraphQL query to check if a variant with a specific SKU exists.
+// It's efficient as it only asks for 1 result.
+const SKU_EXISTS_QUERY = `
+  query skuExists($query: String!) {
+    productVariants(first: 1, query: $query) {
+      edges {
+        node {
+          id
+          sku
+        }
+      }
+    }
+  }
+`;
+
 export const action = async ({ request }) => {
   try {
     // ✅ Verify HMAC + get payload
@@ -11,11 +26,7 @@ export const action = async ({ request }) => {
     
     const product = payload;
 
-    // =======================================================================
-    // ✅ IDEMPOTENCY CHECK
-    // Before processing, check if we have already generated SKUs for this product.
-    // This prevents duplicate runs if Shopify resends the webhook.
-    // =======================================================================
+    // ✅ IDEMPOTENCY CHECK: Prevents duplicate runs for the same webhook event.
     const existingSkus = await prisma.productSKU.findFirst({
       where: {
         shop,
@@ -25,7 +36,6 @@ export const action = async ({ request }) => {
 
     if (existingSkus) {
       console.log(`✅ SKUs already generated for product ${product.id}. Skipping duplicate webhook run.`);
-      // Return a 200 OK response to let Shopify know we've handled it.
       return json({ status: "skipped", message: "SKUs already exist for this product." });
     }
 
@@ -33,10 +43,7 @@ export const action = async ({ request }) => {
     
     // ✅ Get stored access token
     const session = await prisma.session.findFirst({
-      where: {
-        shop,
-        isOnline: false,
-      },
+      where: { shop, isOnline: false },
     });
 
     if (!session || !session.accessToken) {
@@ -60,8 +67,46 @@ export const action = async ({ request }) => {
     if (!storeCounter) {
       throw new Error(`❌ StoreCounter not initialized for shop ${shop}`);
     }
-    const startSku = storeCounter.currentSku;
-    console.log(`✅ Starting SKU: ${startSku}`);
+    
+    // =======================================================================
+    // ✅ NEW: SKU UNIQUENESS VALIDATION LOGIC
+    // Phase 1: Find enough available SKUs before assigning anything.
+    // =======================================================================
+    const skusNeeded = variants.length;
+    const availableSkus = [];
+    let nextSkuToTry = storeCounter.currentSku;
+
+    console.log(`🔍 Searching for ${skusNeeded} unique SKUs, starting from ${nextSkuToTry}...`);
+
+    while (availableSkus.length < skusNeeded) {
+      // Query Shopify to see if a variant with this SKU already exists
+      const skuExistsResponse = await admin.query({
+        data: {
+          query: SKU_EXISTS_QUERY,
+          variables: { query: `sku:${nextSkuToTry}` },
+        },
+      });
+
+      const variantsWithSku = skuExistsResponse.body.data.productVariants.edges;
+
+      if (variantsWithSku.length === 0) {
+        // SKU is available. Add it to our list.
+        console.log(`👍 SKU ${nextSkuToTry} is available.`);
+        availableSkus.push(nextSkuToTry);
+      } else {
+        // SKU is taken. Log it and the loop will try the next number.
+        console.log(`👎 SKU ${nextSkuToTry} is already in use. Skipping.`);
+      }
+      
+      // Increment to check the next number in the sequence.
+      nextSkuToTry++;
+    }
+
+    console.log(`✅ Found ${skusNeeded} unique SKUs: ${availableSkus.join(', ')}`);
+
+    // =======================================================================
+    // Phase 2: Assign the guaranteed-unique SKUs to the variants.
+    // =======================================================================
 
     // ✅ Build GraphQL mutation for metafields
     const graphqlVariants = variants.map((variant, i) => ({
@@ -70,7 +115,7 @@ export const action = async ({ request }) => {
         {
           namespace: "custom",
           key: "generated_sku",
-          value: String(startSku + i),
+          value: String(availableSkus[i]), // Use the unique SKU from our list
           type: "single_line_text_field",
         },
       ],
@@ -81,12 +126,6 @@ export const action = async ({ request }) => {
       mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
         productVariantsBulkUpdate(productId: $productId, variants: $variants) {
           product { id }
-          productVariants {
-            id
-            metafields(first: 5) {
-              edges { node { namespace key value } }
-            }
-          }
           userErrors { field message }
         }
       }
@@ -102,21 +141,20 @@ export const action = async ({ request }) => {
       },
     });
 
-    const graphqlData = graphqlResponse.body;
-    const { userErrors } = graphqlData.data.productVariantsBulkUpdate;
+    const { userErrors } = graphqlResponse.body.data.productVariantsBulkUpdate;
 
     if (userErrors.length > 0) {
       console.error("❌ Shopify GraphQL userErrors:", userErrors);
-      return json({ status: "error", message: userErrors }, { status: 400 });
+      // Even if this fails, we continue to the REST update as it's more critical.
+    } else {
+      console.log("✅ Metafields added to all variants");
     }
-    console.log("✅ Metafields added to all variants");
 
     // ✅ REST: update native SKU and log to our DB
     for (let i = 0; i < variants.length; i++) {
       const variant = variants[i];
-      const newSku = startSku + i;
+      const newSku = availableSkus[i]; // Get the assigned unique SKU
 
-      // Update the native SKU field in Shopify
       const restResponse = await fetch(
         `https://${shop}/admin/api/2024-07/variants/${variant.id}.json`,
         {
@@ -134,16 +172,14 @@ export const action = async ({ request }) => {
         }
       );
 
-      if (!restResponse.ok) {
-        const errorData = await restResponse.text();
-        console.error(`❌ Failed to update native SKU for variant ${variant.id}. Status: ${restResponse.status}. Body: ${errorData}`);
-        // Decide if you want to throw an error here or continue
+      if (restResponse.ok) {
+        console.log(`✅ Native SKU ${newSku} updated for variant ${variant.id}`);
       } else {
-        const restData = await restResponse.json();
-        console.log(`✅ Native SKU ${newSku} updated for variant ${variant.id}:`, restData.variant.sku);
+        const errorText = await restResponse.text();
+        console.error(`❌ Failed to update native SKU for variant ${variant.id}: ${errorText}`);
       }
 
-      // Log the generated SKU to our database. This is crucial for the idempotency check.
+      // Log the generated SKU to our database for the idempotency check.
       await prisma.productSKU.create({
         data: {
           shop,
@@ -154,19 +190,19 @@ export const action = async ({ request }) => {
       });
     }
 
-    // ✅ Update the counter only after all operations are successful
+    // =======================================================================
+    // Phase 3: Update the counter to the next available number.
+    // =======================================================================
     await prisma.storeCounter.update({
       where: { shop },
-      data: { currentSku: startSku + variants.length },
+      data: { currentSku: nextSkuToTry }, // `nextSkuToTry` is already incremented to the next open spot
     });
 
-    console.log(`✅ SKU counter updated to ${startSku + variants.length} for shop ${shop}`);
-    return json({ status: "ok", nextSku: startSku + variants.length });
+    console.log(`✅ SKU counter updated to ${nextSkuToTry} for shop ${shop}`);
+    return json({ status: "ok", nextSku: nextSkuToTry });
 
   } catch (error) {
     console.error(`❌ Error in PRODUCTS_CREATE webhook: ${error.message}`);
-    // We return a 500 status here, which might cause Shopify to retry,
-    // but our idempotency check will now handle the retry gracefully.
     return json({ status: "error", message: error.message }, { status: 500 });
   }
 };
