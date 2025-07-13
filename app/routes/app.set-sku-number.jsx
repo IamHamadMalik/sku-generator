@@ -44,6 +44,7 @@ export default function SetSkuNumber() {
   const fetcher = useFetcher();
   const [number, setNumber] = useState(currentSku);
 
+  
   return (
     <AppProvider i18n={enTranslations}>
       <Page title="Set Starting SKU Number">
