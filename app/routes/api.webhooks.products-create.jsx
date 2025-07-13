@@ -1,10 +1,10 @@
-// app/routes/api/webhooks/products-create.jsx
 import { json } from "@remix-run/node";
 import prisma from "../db.server";
 import { shopifyApiClient, authenticate } from "../shopify.server";
 
-// GraphQL query to check if a variant with a specific SKU exists.
-// It's efficient as it only asks for 1 result.
+// Define your prefix as a constant for easy access and modification.
+const SKU_PREFIX = "LA";
+
 const SKU_EXISTS_QUERY = `
   query skuExists($query: String!) {
     productVariants(first: 1, query: $query) {
@@ -20,13 +20,11 @@ const SKU_EXISTS_QUERY = `
 
 export const action = async ({ request }) => {
   try {
-    // ✅ Verify HMAC + get payload
     const { shop, payload } = await authenticate.webhook(request);
     console.log(`✅ Received PRODUCTS_CREATE webhook for shop: ${shop}`);
     
     const product = payload;
 
-    // ✅ IDEMPOTENCY CHECK: Prevents duplicate runs for the same webhook event.
     const existingSkus = await prisma.productSKU.findFirst({
       where: {
         shop,
@@ -35,13 +33,12 @@ export const action = async ({ request }) => {
     });
 
     if (existingSkus) {
-      console.log(`✅ SKUs already generated for product ${product.id}. Skipping duplicate webhook run.`);
+      console.log(`✅ SKUs already generated for product ${product.id}. Skipping.`);
       return json({ status: "skipped", message: "SKUs already exist for this product." });
     }
 
     console.log(`✅ Payload: ${JSON.stringify(payload)}`);
     
-    // ✅ Get stored access token
     const session = await prisma.session.findFirst({
       where: { shop, isOnline: false },
     });
@@ -62,60 +59,58 @@ export const action = async ({ request }) => {
       return json({ status: "error", message: "No variants found" }, { status: 400 });
     }
 
-    // ✅ Get SKU counter
     const storeCounter = await prisma.storeCounter.findUnique({ where: { shop } });
     if (!storeCounter) {
       throw new Error(`❌ StoreCounter not initialized for shop ${shop}`);
     }
     
     // =======================================================================
-    // ✅ NEW: SKU UNIQUENESS VALIDATION LOGIC
-    // Phase 1: Find enough available SKUs before assigning anything.
+    // ✅ MODIFIED: SKU UNIQUENESS VALIDATION LOGIC
     // =======================================================================
     const skusNeeded = variants.length;
-    const availableSkus = [];
+    const availableSkuNumbers = []; // Stores only the available *numbers*.
     let nextSkuToTry = storeCounter.currentSku;
 
-    console.log(`🔍 Searching for ${skusNeeded} unique SKUs, starting from ${nextSkuToTry}...`);
+    console.log(`🔍 Searching for ${skusNeeded} unique SKUs, starting from ${SKU_PREFIX}${nextSkuToTry}...`);
 
-    while (availableSkus.length < skusNeeded) {
-      // Query Shopify to see if a variant with this SKU already exists
+    while (availableSkuNumbers.length < skusNeeded) {
+      // Construct the full SKU with the prefix for checking.
+      const fullSkuToCheck = `${SKU_PREFIX}${nextSkuToTry}`;
+      
       const skuExistsResponse = await admin.query({
         data: {
           query: SKU_EXISTS_QUERY,
-          variables: { query: `sku:${nextSkuToTry}` },
+          // Use the full, prefixed SKU in the query.
+          variables: { query: `sku:${fullSkuToCheck}` },
         },
       });
 
       const variantsWithSku = skuExistsResponse.body.data.productVariants.edges;
 
       if (variantsWithSku.length === 0) {
-        // SKU is available. Add it to our list.
-        console.log(`👍 SKU ${nextSkuToTry} is available.`);
-        availableSkus.push(nextSkuToTry);
+        console.log(`👍 SKU ${fullSkuToCheck} is available.`);
+        // Add the available *number* to our list.
+        availableSkuNumbers.push(nextSkuToTry);
       } else {
-        // SKU is taken. Log it and the loop will try the next number.
-        console.log(`👎 SKU ${nextSkuToTry} is already in use. Skipping.`);
+        console.log(`👎 SKU ${fullSkuToCheck} is already in use. Skipping.`);
       }
       
-      // Increment to check the next number in the sequence.
       nextSkuToTry++;
     }
 
-    console.log(`✅ Found ${skusNeeded} unique SKUs: ${availableSkus.join(', ')}`);
+    console.log(`✅ Found ${skusNeeded} unique SKU numbers: ${availableSkuNumbers.join(', ')}`);
 
     // =======================================================================
-    // Phase 2: Assign the guaranteed-unique SKUs to the variants.
+    // ✅ MODIFIED: Assign the guaranteed-unique SKUs to the variants.
     // =======================================================================
-
-    // ✅ Build GraphQL mutation for metafields
     const graphqlVariants = variants.map((variant, i) => ({
       id: `gid://shopify/ProductVariant/${variant.id}`,
       metafields: [
         {
           namespace: "custom",
           key: "generated_sku",
-          value: String(availableSkus[i]), // Use the unique SKU from our list
+          // Prepend the prefix to the unique number before assigning.
+          value: `${SKU_PREFIX}${availableSkuNumbers[i]}`,
           type: "single_line_text_field",
         },
       ],
@@ -145,15 +140,15 @@ export const action = async ({ request }) => {
 
     if (userErrors.length > 0) {
       console.error("❌ Shopify GraphQL userErrors:", userErrors);
-      // Even if this fails, we continue to the REST update as it's more critical.
     } else {
       console.log("✅ Metafields added to all variants");
     }
 
-    // ✅ REST: update native SKU and log to our DB
     for (let i = 0; i < variants.length; i++) {
       const variant = variants[i];
-      const newSku = availableSkus[i]; // Get the assigned unique SKU
+      const newSkuNumber = availableSkuNumbers[i];
+      // Construct the full SKU for the REST API update.
+      const fullNewSku = `${SKU_PREFIX}${newSkuNumber}`;
 
       const restResponse = await fetch(
         `https://${shop}/admin/api/2024-07/variants/${variant.id}.json`,
@@ -166,26 +161,27 @@ export const action = async ({ request }) => {
           body: JSON.stringify({
             variant: {
               id: variant.id,
-              sku: String(newSku),
+              // Use the full, prefixed SKU.
+              sku: fullNewSku,
             },
           }),
         }
       );
 
       if (restResponse.ok) {
-        console.log(`✅ Native SKU ${newSku} updated for variant ${variant.id}`);
+        console.log(`✅ Native SKU ${fullNewSku} updated for variant ${variant.id}`);
       } else {
         const errorText = await restResponse.text();
         console.error(`❌ Failed to update native SKU for variant ${variant.id}: ${errorText}`);
       }
 
-      // Log the generated SKU to our database for the idempotency check.
       await prisma.productSKU.create({
         data: {
           shop,
           productId: String(product.id),
           variantId: String(variant.id),
-          skuNumber: newSku,
+          // Store only the number, maintaining data consistency.
+          skuNumber: newSkuNumber,
         },
       });
     }
@@ -195,7 +191,7 @@ export const action = async ({ request }) => {
     // =======================================================================
     await prisma.storeCounter.update({
       where: { shop },
-      data: { currentSku: nextSkuToTry }, // `nextSkuToTry` is already incremented to the next open spot
+      data: { currentSku: nextSkuToTry },
     });
 
     console.log(`✅ SKU counter updated to ${nextSkuToTry} for shop ${shop}`);

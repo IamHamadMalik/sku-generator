@@ -56,13 +56,18 @@ export default function SetSkuNumber() {
               onChange={setNumber}
               type="number"
               name="baseNumber"
+              // ✅ ADDED: Display the "LA" prefix in the input field.
+              prefix="LA"
             />
             <Button submit primary>
               Set SKU Number
             </Button>
           </fetcher.Form>
+          {/* ✅ MODIFIED: Make the success message clearer. */}
           {fetcher.data?.success && (
-            <p>SKU number updated to: {fetcher.data.currentSku}</p>
+            <p>
+              SKU number updated. New SKUs will start from: LA{fetcher.data.currentSku}
+            </p>
           )}
         </Card>
       </Page>
