@@ -28,7 +28,6 @@ export default function App() {
         <Link to="/app" rel="home">
           Home
         </Link>
-        <Link to="/app/additional">Additional page</Link>
         <Link to="/app/set-sku-number">Set SKU Number</Link> {/* ✅ Add this */}
       </NavMenu>
       <Outlet />
