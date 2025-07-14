@@ -1,4 +1,4 @@
-import { Page, Layout, Card, Heading, Text, List } from "@shopify/polaris";
+import { Page, Layout, Card, Text, List } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
@@ -14,18 +14,18 @@ export default function Index() {
       <Layout>
         <Layout.Section>
           <Card sectioned>
-            <Heading element="h1" variant="headingXl">
+            <Text variant="headingXl" as="h1">
               Welcome to SKU Generator
-            </Heading>
+            </Text>
             <Text variant="bodyMd" as="p" color="subdued">
               Automate your product SKU generation with our powerful tool. Follow the instructions below to get started.
             </Text>
           </Card>
 
           <Card sectioned>
-            <Heading element="h2" variant="headingLg">
+            <Text variant="headingLg" as="h2">
               How to Use SKU Generator
-            </Heading>
+            </Text>
             
             <List type="number">
               <List.Item>
@@ -76,9 +76,9 @@ export default function Index() {
           </Card>
 
           <Card sectioned>
-            <Heading element="h2" variant="headingLg">
+            <Text variant="headingLg" as="h2">
               Best Practices
-            </Heading>
+            </Text>
             <List>
               <List.Item>
                 Start with a number high enough to accommodate future product growth
