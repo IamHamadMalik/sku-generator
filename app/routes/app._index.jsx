@@ -51,7 +51,7 @@ export default function Index() {
                   Create Products
                 </Text>
                 <Text variant="bodyMd" as="p">
-                  Generate products with at least one variant in your Shopify admin.
+                  Generate products in your Shopify admin.
                 </Text>
               </List.Item>
               
@@ -60,7 +60,7 @@ export default function Index() {
                   Automatic SKU Assignment
                 </Text>
                 <Text variant="bodyMd" as="p">
-                  New variants will automatically receive SKUs with the "LA" prefix (e.g., LA123456).
+                  New product will automatically receive SKUs with the "LA" prefix (e.g., LA123456).
                 </Text>
               </List.Item>
               
@@ -69,7 +69,7 @@ export default function Index() {
                   Sequential Numbering
                 </Text>
                 <Text variant="bodyMd" as="p">
-                  Each new product variant will receive the next sequential number in your SKU sequence.
+                  Each new product will receive the next sequential number in your SKU sequence.
                 </Text>
               </List.Item>
             </List>
